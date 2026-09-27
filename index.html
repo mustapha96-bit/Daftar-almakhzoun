@@ -653,6 +653,20 @@
 <div id="lockScreen"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyDH3js62pGQoFn_qLG1SPZxUUtG4zfL4mo",
+    authDomain: "daftar-almakhzoun.firebaseapp.com",
+    projectId: "daftar-almakhzoun",
+    storageBucket: "daftar-almakhzoun.firebasestorage.app",
+    messagingSenderId: "76508087025",
+    appId: "1:76508087025:web:a37a84867cec4af3d31f50"
+  };
+  firebase.initializeApp(firebaseConfig);
+</script>
 <script>
 (function(){
   const state = { products: [], movements: [], sales: [], returns: [], customers: [], debtPayments: [], expenses: [], suppliers: [], supplierPurchases: [], supplierPayments: [], workers: [], workerTransactions: [], customerLoans: [], ownerWithdrawals: [], settings: null, cart: [], db: null, dbReady: false, user: null };
@@ -780,25 +794,36 @@
   }
 
   // ---------- Local fallback store (used if db capability unavailable) ----------
+  // Persists to the device's real localStorage so data survives closing/reopening the app.
   let localMode = false;
+  const LOCAL_STORAGE_KEY = 'daftar_almakhzoun_data_v1';
   function localSave() {
     try {
-      window.__inv_local = window.__inv_local || {};
-      window.__inv_local.products = state.products;
-      window.__inv_local.movements = state.movements;
-      window.__inv_local.sales = state.sales;
-      window.__inv_local.returns = state.returns;
-      window.__inv_local.customers = state.customers;
-      window.__inv_local.debtPayments = state.debtPayments;
-      window.__inv_local.suppliers = state.suppliers;
-      window.__inv_local.supplierPurchases = state.supplierPurchases;
-      window.__inv_local.supplierPayments = state.supplierPayments;
-      window.__inv_local.workers = state.workers;
-      window.__inv_local.workerTransactions = state.workerTransactions;
-      window.__inv_local.ownerWithdrawals = state.ownerWithdrawals;
-      window.__inv_local.customerLoans = state.customerLoans;
-      window.__inv_local.expenses = state.expenses;
+      const data = {
+        products: state.products,
+        movements: state.movements,
+        sales: state.sales,
+        returns: state.returns,
+        customers: state.customers,
+        debtPayments: state.debtPayments,
+        suppliers: state.suppliers,
+        supplierPurchases: state.supplierPurchases,
+        supplierPayments: state.supplierPayments,
+        workers: state.workers,
+        workerTransactions: state.workerTransactions,
+        ownerWithdrawals: state.ownerWithdrawals,
+        customerLoans: state.customerLoans,
+        expenses: state.expenses,
+        settings: state.settings
+      };
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
     } catch(e) {}
+  }
+  function localLoad() {
+    try {
+      const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch(e) { return {}; }
   }
 
   // ---------- Rendering ----------
@@ -4411,7 +4436,7 @@
       } catch(e) { toast('تعذّر حفظ الإعدادات'); }
     } else {
       state.settings = { ...(state.settings||{}), ...data };
-      try { window.__inv_local = window.__inv_local || {}; window.__inv_local.settings = state.settings; } catch(e) {}
+      localSave();
     }
   }
 
@@ -4426,6 +4451,8 @@
           ${cashierFieldsHtml('st')}
           <label style="display:flex; gap:8px; align-items:center; margin:0 0 14px; font-size:14px"><input type="checkbox" id="stCashierPrice" ${s.cashierPriceEdit === false ? '' : 'checked'}> السماح لأمين الصندوق بتعديل السعر وإعطاء تخفيض</label>
           <div class="field"><label>رقم واتساب لاستقبال طلبات المنتجات</label><input id="stWhatsapp" value="${escapeHtml(s.ownerWhatsapp||'')}" placeholder="مثال: 22212345678"></div>
+          <p class="sub" style="margin:0 0 10px">حساب المتجر: ${escapeHtml((firebase.auth().currentUser && firebase.auth().currentUser.email) || '—')}</p>
+          <button class="btn secondary" id="fbSignOutBtn" style="width:100%; margin-bottom:14px">تسجيل خروج من حساب المتجر (لهذا الجهاز)</button>
           <div class="sheet-actions">
             <button class="btn secondary" id="cancelBtn">إلغاء</button>
             <button class="btn" id="saveBtn">حفظ</button>
@@ -4435,6 +4462,11 @@
     `;
     $('#backdrop').addEventListener('click', (e) => { if (e.target.id === 'backdrop') closeSheet(); });
     $('#cancelBtn').addEventListener('click', closeSheet);
+    $('#fbSignOutBtn').addEventListener('click', async () => {
+      closeSheet();
+      currentRole = null; currentCashier = null;
+      try { await firebase.auth().signOut(); } catch(e) {}
+    });
     $('#saveBtn').addEventListener('click', async () => {
       const ownerPin = $('#stOwnerPin').value.trim();
 
@@ -4617,11 +4649,47 @@
     $('#syncLabel').innerHTML = `<span class="sync-dot ${ok?'':'off'}" id="syncDot"></span>${label}`;
   }
 
-  async function initDb() {
+  function renderAuthGate(errorMsg) {
+    const el = $('#lockScreen');
+    el.className = 'show';
+    el.innerHTML = `
+      <div class="lock-card">
+        <h2>تسجيل دخول المتجر</h2>
+        <p class="sub">سجّل دخول بحساب المتجر (بريد إلكتروني وكلمة مرور) — نفس الحساب يُستخدم من جميع الأجهزة (المدير وأمناء الصندوق) للمزامنة.</p>
+        <div class="field"><label>البريد الإلكتروني</label><input id="fbEmail" type="email" placeholder="example@email.com" autocomplete="email"></div>
+        <div class="field"><label>كلمة المرور</label><input id="fbPassword" type="password" placeholder="6 أحرف على الأقل" autocomplete="current-password"></div>
+        ${errorMsg ? `<p class="sub" style="color:#c0392b">${escapeHtml(errorMsg)}</p>` : ''}
+        <button class="btn" id="fbLoginBtn" style="width:100%">دخول</button>
+        <button class="btn secondary" id="fbSignupBtn" style="width:100%; margin-top:8px">إنشاء حساب المتجر (أول مرة فقط)</button>
+      </div>
+    `;
+    $('#fbLoginBtn').addEventListener('click', async () => {
+      const email = $('#fbEmail').value.trim();
+      const pass = $('#fbPassword').value;
+      if (!email || !pass) { toast('اكتب البريد وكلمة المرور'); return; }
+      try {
+        await firebase.auth().signInWithEmailAndPassword(email, pass);
+      } catch(e) {
+        renderAuthGate('تعذّر الدخول: تأكد من البريد وكلمة المرور');
+      }
+    });
+    $('#fbSignupBtn').addEventListener('click', async () => {
+      const email = $('#fbEmail').value.trim();
+      const pass = $('#fbPassword').value;
+      if (!email || !pass) { toast('اكتب البريد وكلمة المرور'); return; }
+      if (pass.length < 6) { toast('كلمة المرور لازم تكون 6 أحرف على الأقل'); return; }
+      try {
+        await firebase.auth().createUserWithEmailAndPassword(email, pass);
+      } catch(e) {
+        renderAuthGate(e.code === 'auth/email-already-in-use' ? 'البريد مستخدم من قبل — اضغط "دخول" بدل إنشاء حساب' : 'تعذّر إنشاء الحساب، تحقق من البيانات');
+      }
+    });
+  }
+
+  async function initFirestore() {
     try {
-      if (!window.claude || typeof window.claude.use !== 'function') throw new Error('no-runtime');
-      const db = await window.claude.use('db');
-      if (!db) throw new Error('unavailable');
+      const db = firebase.firestore();
+      try { await db.enablePersistence({ synchronizeTabs: true }); } catch(e) {}
       state.db = db;
 
       const collections = ['products', 'movements', 'sales', 'returns', 'customers', 'debtPayments', 'expenses', 'suppliers', 'supplierPurchases', 'supplierPayments', 'workers', 'workerTransactions', 'customerLoans', 'ownerWithdrawals'];
@@ -4642,10 +4710,10 @@
         if (!currentRole) renderLockScreen();
       });
 
-      setSyncStatus(true, 'متزامن مع الفريق');
+      setSyncStatus(true, 'متزامن عبر الإنترنت');
     } catch (e) {
       localMode = true;
-      const saved = window.__inv_local || {};
+      const saved = localLoad();
       state.products = saved.products || [];
       state.movements = saved.movements || [];
       state.sales = saved.sales || [];
@@ -4668,8 +4736,20 @@
   }
 
   renderAll();
-  renderLockScreen();
-  initDb();
+  (function showInitialLoading(){
+    const el0 = $('#lockScreen');
+    el0.className = 'show';
+    el0.innerHTML = `<div class="lock-card"><h2>جارٍ التحقق…</h2></div>`;
+  })();
+  firebase.auth().onAuthStateChanged((user) => {
+    if (!user) {
+      state.db = null;
+      currentRole = null; currentCashier = null;
+      renderAuthGate();
+      return;
+    }
+    initFirestore();
+  });
 })();
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
