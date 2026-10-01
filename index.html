@@ -4826,6 +4826,84 @@
     });
   }
 
+  // ---------- Real persistent local database (used when the Claude artifact db is unavailable,
+  // e.g. when hosted outside claude.ai such as on GitHub Pages). Mirrors the collection().add/
+  // update/delete/doc()/onSnapshot API so the rest of the app needs zero changes. ----------
+  function createLocalDb() {
+    const KEY = 'daftar_almakhzoun_db_v1';
+    let data = {};
+    try { data = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { data = {}; }
+    const colListeners = {};   // name -> [cb]
+    const docListeners = {};   // name:id -> [cb]
+
+    function persist() {
+      try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { console.error('local db save failed', e); }
+    }
+    function snapDoc(d) {
+      return { id: d.id, data: () => { const { id, ...rest } = d; return rest; } };
+    }
+    function fireCollection(name) {
+      const docs = (data[name] || []).map(snapDoc);
+      (colListeners[name] || []).forEach(cb => cb({ docs }));
+    }
+    function fireDoc(name, id) {
+      const key = name + ':' + id;
+      if (!docListeners[key]) return;
+      const item = (data[name] || []).find(d => d.id === id);
+      const snap = item
+        ? { exists: true, data: () => { const { id: _id, ...rest } = item; return rest; } }
+        : { exists: false, data: () => null };
+      docListeners[key].forEach(cb => cb(snap));
+    }
+    function uid() { return 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
+
+    return {
+      collection(name) {
+        data[name] = data[name] || [];
+        return {
+          onSnapshot(cb) {
+            colListeners[name] = colListeners[name] || [];
+            colListeners[name].push(cb);
+            fireCollection(name);
+          },
+          async add(obj) {
+            const id = uid();
+            data[name].push({ id, ...obj });
+            persist(); fireCollection(name); fireDoc(name, id);
+            return { id };
+          },
+          doc(id) {
+            return {
+              id,
+              async update(patch) {
+                const idx = data[name].findIndex(d => d.id === id);
+                if (idx >= 0) data[name][idx] = { ...data[name][idx], ...patch };
+                else data[name].push({ id, ...patch });
+                persist(); fireCollection(name); fireDoc(name, id);
+              },
+              async set(obj) {
+                const idx = data[name].findIndex(d => d.id === id);
+                if (idx >= 0) data[name][idx] = { id, ...obj };
+                else data[name].push({ id, ...obj });
+                persist(); fireCollection(name); fireDoc(name, id);
+              },
+              async delete() {
+                data[name] = data[name].filter(d => d.id !== id);
+                persist(); fireCollection(name); fireDoc(name, id);
+              },
+              onSnapshot(cb) {
+                const key = name + ':' + id;
+                docListeners[key] = docListeners[key] || [];
+                docListeners[key].push(cb);
+                fireDoc(name, id);
+              }
+            };
+          }
+        };
+      }
+    };
+  }
+
   // ---------- Sync connection ----------
   function setSyncStatus(ok, label) {
     $('#syncDot').classList.toggle('off', !ok);
@@ -4860,25 +4938,19 @@
       setSyncStatus(true, 'متزامن مع الفريق');
     } catch (e) {
       localMode = true;
-      const saved = window.__inv_local || {};
-      state.products = saved.products || [];
-      state.movements = saved.movements || [];
-      state.sales = saved.sales || [];
-      state.returns = saved.returns || [];
-      state.customers = saved.customers || [];
-      state.debtPayments = saved.debtPayments || [];
-      state.suppliers = saved.suppliers || [];
-      state.supplierPurchases = saved.supplierPurchases || [];
-      state.supplierPayments = saved.supplierPayments || [];
-      state.workers = saved.workers || [];
-      state.workerTransactions = saved.workerTransactions || [];
-      state.ownerWithdrawals = saved.ownerWithdrawals || [];
-      state.customerLoans = saved.customerLoans || [];
-      state.expenses = saved.expenses || [];
-      state.settings = saved.settings || null;
-      setSyncStatus(false, 'وضع محلي (بدون مزامنة)');
-      renderAll();
-      renderLockScreen();
+      state.db = createLocalDb();
+      const collections = ['products', 'movements', 'sales', 'returns', 'customers', 'debtPayments', 'expenses', 'suppliers', 'supplierPurchases', 'supplierPayments', 'workers', 'workerTransactions', 'customerLoans', 'ownerWithdrawals'];
+      collections.forEach(name => {
+        state.db.collection(name).onSnapshot((snap) => {
+          state[name] = snap.docs.map(d => ({id: d.id, ...d.data()}));
+          renderAll();
+        });
+      });
+      state.db.collection('settings').doc('main').onSnapshot((snap) => {
+        state.settings = snap.exists ? snap.data() : null;
+        if (!currentRole) renderLockScreen();
+      });
+      setSyncStatus(false, 'محفوظ محليًا على هذا الجهاز');
     }
   }
 
