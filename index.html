@@ -428,14 +428,6 @@
     background: var(--paper); color: var(--ink); margin-bottom: 14px;
   }
 </style>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#1F3A34">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="المخزون">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" href="icon-192.png">
 </head>
 <body>
 
@@ -652,20 +644,41 @@
 <div id="modalRoot"></div>
 <div id="lockScreen"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script>
-  const firebaseConfig = {
-    apiKey: "AIzaSyDH3js62pGQoFn_qLG1SPZxUUtG4zfL4mo",
-    authDomain: "daftar-almakhzoun.firebaseapp.com",
-    projectId: "daftar-almakhzoun",
-    storageBucket: "daftar-almakhzoun.firebasestorage.app",
-    messagingSenderId: "76508087025",
-    appId: "1:76508087025:web:a37a84867cec4af3d31f50"
-  };
-  firebase.initializeApp(firebaseConfig);
+  // Resilient ZXing loader (supports QR codes AND linear barcodes: EAN-13/8, UPC, Code128...).
+  // Sets window.__zxingReady (Promise<boolean>).
+  window.__zxingReady = new Promise((resolve) => {
+    const sources = [
+      'https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/zxing/0.19.1/index.min.js'
+    ];
+    let i = 0;
+    function tryNext() {
+      if (i >= sources.length) { resolve(false); return; }
+      const s = document.createElement('script');
+      s.src = sources[i++];
+      s.onload = () => resolve(typeof ZXing !== 'undefined' && !!ZXing.BrowserMultiFormatReader);
+      s.onerror = tryNext;
+      document.head.appendChild(s);
+    }
+    tryNext();
+  });
+  window.__quaggaReady = new Promise((resolve) => {
+    const sources = [
+      'https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/quagga2/1.8.4/quagga.min.js'
+    ];
+    let i = 0;
+    function tryNext() {
+      if (i >= sources.length) { resolve(false); return; }
+      const s = document.createElement('script');
+      s.src = sources[i++];
+      s.onload = () => resolve(typeof Quagga !== 'undefined');
+      s.onerror = tryNext;
+      document.head.appendChild(s);
+    }
+    tryNext();
+  });
 </script>
 <script>
 (function(){
@@ -794,36 +807,25 @@
   }
 
   // ---------- Local fallback store (used if db capability unavailable) ----------
-  // Persists to the device's real localStorage so data survives closing/reopening the app.
   let localMode = false;
-  const LOCAL_STORAGE_KEY = 'daftar_almakhzoun_data_v1';
   function localSave() {
     try {
-      const data = {
-        products: state.products,
-        movements: state.movements,
-        sales: state.sales,
-        returns: state.returns,
-        customers: state.customers,
-        debtPayments: state.debtPayments,
-        suppliers: state.suppliers,
-        supplierPurchases: state.supplierPurchases,
-        supplierPayments: state.supplierPayments,
-        workers: state.workers,
-        workerTransactions: state.workerTransactions,
-        ownerWithdrawals: state.ownerWithdrawals,
-        customerLoans: state.customerLoans,
-        expenses: state.expenses,
-        settings: state.settings
-      };
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+      window.__inv_local = window.__inv_local || {};
+      window.__inv_local.products = state.products;
+      window.__inv_local.movements = state.movements;
+      window.__inv_local.sales = state.sales;
+      window.__inv_local.returns = state.returns;
+      window.__inv_local.customers = state.customers;
+      window.__inv_local.debtPayments = state.debtPayments;
+      window.__inv_local.suppliers = state.suppliers;
+      window.__inv_local.supplierPurchases = state.supplierPurchases;
+      window.__inv_local.supplierPayments = state.supplierPayments;
+      window.__inv_local.workers = state.workers;
+      window.__inv_local.workerTransactions = state.workerTransactions;
+      window.__inv_local.ownerWithdrawals = state.ownerWithdrawals;
+      window.__inv_local.customerLoans = state.customerLoans;
+      window.__inv_local.expenses = state.expenses;
     } catch(e) {}
-  }
-  function localLoad() {
-    try {
-      const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch(e) { return {}; }
   }
 
   // ---------- Rendering ----------
@@ -1684,12 +1686,17 @@
     root.innerHTML = `
       <div class="sheet-backdrop" id="backdrop">
         <div class="sheet">
-          <h3>مسح رمز QR</h3>
+          <h3>مسح رمز QR / باركود</h3>
           <div class="scan-view" id="scanView">
             <video id="scanVideo" playsinline muted autoplay></video>
             <div class="frame"></div>
           </div>
-          <div class="scan-status" id="scanStatus">جارٍ تشغيل الكاميرا…</div>
+          <div class="scan-status" id="scanStatus">جارٍ التحضير…</div>
+          <div class="field">
+            <button type="button" class="btn secondary" id="captureBtn" style="width:100%">📷 التقط صورة للرمز</button>
+            <input type="file" id="captureInput" accept="image/*" capture="environment" style="display:none">
+            <div class="pmeta" style="margin-top:6px; text-align:center">قرّب المسافة (١٠-١٥ سم)، ثبّت اليد، وتجنّب انعكاس الضوء على الباركود</div>
+          </div>
           <div class="scan-divider">أو أدخله يدويًا</div>
           <div class="field">
             <div style="display:flex; gap:6px;">
@@ -1704,14 +1711,11 @@
         </div>
       </div>
     `;
-    let stream = null, raf = null, stopped = false;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let reader = null, stopped = false;
 
     function stopCamera() {
       stopped = true;
-      if (raf) cancelAnimationFrame(raf);
-      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      if (reader) { try { reader.reset(); } catch(e) {} }
     }
     function finish(code) {
       stopCamera();
@@ -1743,40 +1747,170 @@
       }
     });
 
+    function setStatus(msg) { const st = $('#scanStatus'); if (st) st.textContent = msg; }
+
+    function loadImg(url) {
+      return new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = rej; img.src = url; });
+    }
+    function rotatedDataUrl(img, angle, enhance) {
+      const c = document.createElement('canvas');
+      const swap = angle === 90 || angle === 270;
+      c.width = swap ? img.naturalHeight : img.naturalWidth;
+      c.height = swap ? img.naturalWidth : img.naturalHeight;
+      const cx = c.getContext('2d');
+      if (enhance) cx.filter = 'grayscale(1) contrast(1.6) brightness(1.05)';
+      cx.translate(c.width / 2, c.height / 2);
+      cx.rotate(angle * Math.PI / 180);
+      cx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+      return c.toDataURL('image/jpeg', 0.95);
+    }
+    function makeHardReader() {
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      return new ZXing.BrowserMultiFormatReader(hints);
+    }
+    // Validate EAN-13 / EAN-8 / UPC-A check digit; non-matching lengths (QR text etc.) pass through.
+    function validCheckDigit(code) {
+      if (!/^\d+$/.test(code)) return true;
+      if (![8, 12, 13].includes(code.length)) return true;
+      const digits = code.split('').map(Number);
+      const check = digits.pop();
+      let arr = digits;
+      if (arr.length === 11) arr = [0, ...arr]; // UPC-A -> pad like EAN-13
+      const weights = arr.length === 12 ? [1,3,1,3,1,3,1,3,1,3,1,3] : [3,1,3,1,3,1,3];
+      if (arr.length !== weights.length) return true;
+      const sum = arr.reduce((s, d, i) => s + d * weights[i], 0);
+      return ((10 - (sum % 10)) % 10) === check;
+    }
+    function quaggaDecode(dataUrl) {
+      return new Promise((resolve) => {
+        Quagga.decodeSingle({
+          src: dataUrl,
+          numOfWorkers: 0,
+          inputStream: { size: 1800 },
+          locate: true,
+          decoder: { readers: ['ean_reader', 'upc_reader'] }
+        }, (result) => {
+          const code = result && result.codeResult && result.codeResult.code;
+          resolve(code && validCheckDigit(code) ? code : null);
+        });
+      });
+    }
+
+    $('#captureBtn').addEventListener('click', () => $('#captureInput').click());
+    $('#captureInput').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      setStatus('جارٍ قراءة الصورة…');
+      const url = URL.createObjectURL(file);
+      try {
+        const [zxOk, qgOk] = await Promise.all([window.__zxingReady, window.__quaggaReady]);
+        if (!zxOk && !qgOk) { setStatus('تعذّر تحميل مكتبات القراءة — استخدم الإدخال اليدوي'); return; }
+        const img = await loadImg(url);
+        let found = null;
+
+        // Fast path: try the plain, upright photo first (covers most well-aimed shots quickly)
+        if (qgOk) found = await quaggaDecode(rotatedDataUrl(img, 0, false));
+
+        // Thorough path: only if the fast attempt failed, try all angles + enhanced contrast
+        if (!found && qgOk) {
+          const angles = [0, 90, 180, 270];
+          const jobs = [];
+          angles.forEach(a => {
+            jobs.push(quaggaDecode(rotatedDataUrl(img, a, false)));
+            jobs.push(quaggaDecode(rotatedDataUrl(img, a, true)));
+          });
+          const results = await Promise.all(jobs);
+          const valid = results.filter(Boolean);
+          if (valid.length) found = valid.reduce((a, b) => (b.length > a.length ? b : a));
+        }
+        // Fallback to ZXing (covers QR codes, second opinion for barcodes)
+        if (!found && zxOk) {
+          const tmpReader = makeHardReader();
+          for (const angle of [0, 90, 180, 270]) {
+            try {
+              const dataUrl = angle === 0 ? url : rotatedDataUrl(img, angle);
+              const result = await tmpReader.decodeFromImageUrl(dataUrl);
+              const text = result.getText().trim();
+              if (validCheckDigit(text)) { found = text; break; }
+            } catch (err) { /* try next angle */ }
+          }
+        }
+
+        if (found) finish(found.trim());
+        else setStatus('لم يُعثر على رمز — قرّب الكاميرا أكثر من الباركود وتأكد من وضوحه واستقامته، ثم أعد المحاولة');
+      } catch (err) {
+        setStatus('حدث خطأ أثناء قراءة الصورة');
+      } finally {
+        URL.revokeObjectURL(url);
+        e.target.value = '';
+      }
+    });
+
     (async () => {
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no-camera-api');
-        if (typeof jsQR !== 'function') throw new Error('no-jsqr');
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+        if (window.isSecureContext === false) throw { code: 'insecure' };
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { code: 'no-camera-api' };
+
+        setStatus('جارٍ تحميل مكتبة القراءة…');
+        const ok = await window.__zxingReady;
+        if (stopped) return;
+        if (!ok) throw { code: 'no-lib' };
+
+        setStatus('جارٍ تشغيل الكاميرا…');
+        reader = makeHardReader();
         const video = $('#scanVideo');
-        if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
-        video.srcObject = stream;
-        await video.play().catch(()=>{});
-        const statusEl = $('#scanStatus');
-        if (statusEl) statusEl.textContent = 'وجّه الكاميرا نحو رمز QR';
-        const tick = () => {
+        if (!video) return;
+
+        let started = false;
+        try {
+          await reader.decodeFromConstraints(
+            { video: { facingMode: { ideal: 'environment' } } },
+            video,
+            (result, err) => {
+              if (stopped) return;
+              if (!started) { started = true; setStatus('وجّه الكاميرا نحو الرمز'); }
+              if (result) finish(result.getText().trim());
+            }
+          );
+        } catch (e1) {
           if (stopped) return;
-          const v = $('#scanVideo');
-          if (!v || v.readyState !== v.HAVE_ENOUGH_DATA) { raf = requestAnimationFrame(tick); return; }
-          canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-          let imgData;
-          try { imgData = ctx.getImageData(0, 0, canvas.width, canvas.height); } catch(e) { raf = requestAnimationFrame(tick); return; }
-          const result = jsQR(imgData.data, imgData.width, imgData.height);
-          if (result && result.data) { finish(result.data.trim()); return; }
-          raf = requestAnimationFrame(tick);
-        };
-        raf = requestAnimationFrame(tick);
+          // fallback: retry without facingMode constraint
+          await reader.decodeFromConstraints(
+            { video: true },
+            video,
+            (result, err) => {
+              if (stopped) return;
+              if (!started) { started = true; setStatus('وجّه الكاميرا نحو الرمز'); }
+              if (result) finish(result.getText().trim());
+            }
+          );
+        }
       } catch (e) {
-        const st = $('#scanStatus');
-        if (st) st.textContent = 'الكاميرا غير متاحة هنا — استخدم الإدخال اليدوي بالأسفل';
+        const code = e && e.code || (e && e.name) || '';
+        let msg = 'الكاميرا غير متاحة هنا — استخدم "التقط صورة" أو الإدخال اليدوي بالأسفل';
+        if (code === 'insecure') msg = 'يجب فتح الصفحة عبر HTTPS لتعمل الكاميرا — استخدم "التقط صورة" بالأسفل';
+        else if (code === 'no-lib') msg = 'تعذّر تحميل مكتبة القراءة (تحقق من الاتصال أو مانع الإعلانات) — استخدم "التقط صورة" أو الإدخال اليدوي';
+        else if (code === 'NotAllowedError' || code === 'PermissionDeniedError') msg = 'تم رفض إذن الكاميرا — فعّله من إعدادات المتصفح، أو استخدم "التقط صورة" بالأسفل';
+        else if (code === 'NotFoundError' || code === 'DevicesNotFoundError') msg = 'لا توجد كاميرا متاحة على هذا الجهاز — استخدم الإدخال اليدوي';
+        else if (code === 'NotReadableError' || code === 'TrackStartError') msg = 'الكاميرا مستخدَمة من تطبيق آخر — أغلقه وأعد المحاولة';
+        setStatus(msg);
       }
     })();
   }
 
   function handleGlobalScan(code) {
     const norm = code.trim().toLowerCase();
-    const match = norm ? state.products.find(p => (p.sku||'').trim().toLowerCase() === norm) : null;
+    // normalize EAN-13/UPC-A equivalence: a 13-digit code starting with '0' is the same
+    // item as its 12-digit UPC-A form without the leading zero, and vice versa.
+    const alt = /^\d+$/.test(norm)
+      ? (norm.length === 13 && norm[0] === '0' ? norm.slice(1)
+         : norm.length === 12 ? '0' + norm : null)
+      : null;
+    const match = norm ? state.products.find(p => {
+      const psku = (p.sku || '').trim().toLowerCase();
+      return psku === norm || (alt && psku === alt);
+    }) : null;
     if (match) {
       if (match.quantity <= 0) { toast('لا يوجد مخزون كافٍ لهذا المنتج'); return; }
       state.cart = [cartItemFromProduct(match, 1)];
@@ -4436,7 +4570,7 @@
       } catch(e) { toast('تعذّر حفظ الإعدادات'); }
     } else {
       state.settings = { ...(state.settings||{}), ...data };
-      localSave();
+      try { window.__inv_local = window.__inv_local || {}; window.__inv_local.settings = state.settings; } catch(e) {}
     }
   }
 
@@ -4451,8 +4585,6 @@
           ${cashierFieldsHtml('st')}
           <label style="display:flex; gap:8px; align-items:center; margin:0 0 14px; font-size:14px"><input type="checkbox" id="stCashierPrice" ${s.cashierPriceEdit === false ? '' : 'checked'}> السماح لأمين الصندوق بتعديل السعر وإعطاء تخفيض</label>
           <div class="field"><label>رقم واتساب لاستقبال طلبات المنتجات</label><input id="stWhatsapp" value="${escapeHtml(s.ownerWhatsapp||'')}" placeholder="مثال: 22212345678"></div>
-          <p class="sub" style="margin:0 0 10px">حساب المتجر: ${escapeHtml((firebase.auth().currentUser && firebase.auth().currentUser.email) || '—')}</p>
-          <button class="btn secondary" id="fbSignOutBtn" style="width:100%; margin-bottom:14px">تسجيل خروج من حساب المتجر (لهذا الجهاز)</button>
           <div class="sheet-actions">
             <button class="btn secondary" id="cancelBtn">إلغاء</button>
             <button class="btn" id="saveBtn">حفظ</button>
@@ -4462,11 +4594,6 @@
     `;
     $('#backdrop').addEventListener('click', (e) => { if (e.target.id === 'backdrop') closeSheet(); });
     $('#cancelBtn').addEventListener('click', closeSheet);
-    $('#fbSignOutBtn').addEventListener('click', async () => {
-      closeSheet();
-      currentRole = null; currentCashier = null;
-      try { await firebase.auth().signOut(); } catch(e) {}
-    });
     $('#saveBtn').addEventListener('click', async () => {
       const ownerPin = $('#stOwnerPin').value.trim();
 
@@ -4649,47 +4776,11 @@
     $('#syncLabel').innerHTML = `<span class="sync-dot ${ok?'':'off'}" id="syncDot"></span>${label}`;
   }
 
-  function renderAuthGate(errorMsg) {
-    const el = $('#lockScreen');
-    el.className = 'show';
-    el.innerHTML = `
-      <div class="lock-card">
-        <h2>تسجيل دخول المتجر</h2>
-        <p class="sub">سجّل دخول بحساب المتجر (بريد إلكتروني وكلمة مرور) — نفس الحساب يُستخدم من جميع الأجهزة (المدير وأمناء الصندوق) للمزامنة.</p>
-        <div class="field"><label>البريد الإلكتروني</label><input id="fbEmail" type="email" placeholder="example@email.com" autocomplete="email"></div>
-        <div class="field"><label>كلمة المرور</label><input id="fbPassword" type="password" placeholder="6 أحرف على الأقل" autocomplete="current-password"></div>
-        ${errorMsg ? `<p class="sub" style="color:#c0392b">${escapeHtml(errorMsg)}</p>` : ''}
-        <button class="btn" id="fbLoginBtn" style="width:100%">دخول</button>
-        <button class="btn secondary" id="fbSignupBtn" style="width:100%; margin-top:8px">إنشاء حساب المتجر (أول مرة فقط)</button>
-      </div>
-    `;
-    $('#fbLoginBtn').addEventListener('click', async () => {
-      const email = $('#fbEmail').value.trim();
-      const pass = $('#fbPassword').value;
-      if (!email || !pass) { toast('اكتب البريد وكلمة المرور'); return; }
-      try {
-        await firebase.auth().signInWithEmailAndPassword(email, pass);
-      } catch(e) {
-        renderAuthGate('تعذّر الدخول: تأكد من البريد وكلمة المرور');
-      }
-    });
-    $('#fbSignupBtn').addEventListener('click', async () => {
-      const email = $('#fbEmail').value.trim();
-      const pass = $('#fbPassword').value;
-      if (!email || !pass) { toast('اكتب البريد وكلمة المرور'); return; }
-      if (pass.length < 6) { toast('كلمة المرور لازم تكون 6 أحرف على الأقل'); return; }
-      try {
-        await firebase.auth().createUserWithEmailAndPassword(email, pass);
-      } catch(e) {
-        renderAuthGate(e.code === 'auth/email-already-in-use' ? 'البريد مستخدم من قبل — اضغط "دخول" بدل إنشاء حساب' : 'تعذّر إنشاء الحساب، تحقق من البيانات');
-      }
-    });
-  }
-
-  async function initFirestore() {
+  async function initDb() {
     try {
-      const db = firebase.firestore();
-      try { await db.enablePersistence({ synchronizeTabs: true }); } catch(e) {}
+      if (!window.claude || typeof window.claude.use !== 'function') throw new Error('no-runtime');
+      const db = await window.claude.use('db');
+      if (!db) throw new Error('unavailable');
       state.db = db;
 
       const collections = ['products', 'movements', 'sales', 'returns', 'customers', 'debtPayments', 'expenses', 'suppliers', 'supplierPurchases', 'supplierPayments', 'workers', 'workerTransactions', 'customerLoans', 'ownerWithdrawals'];
@@ -4710,10 +4801,10 @@
         if (!currentRole) renderLockScreen();
       });
 
-      setSyncStatus(true, 'متزامن عبر الإنترنت');
+      setSyncStatus(true, 'متزامن مع الفريق');
     } catch (e) {
       localMode = true;
-      const saved = localLoad();
+      const saved = window.__inv_local || {};
       state.products = saved.products || [];
       state.movements = saved.movements || [];
       state.sales = saved.sales || [];
@@ -4736,26 +4827,9 @@
   }
 
   renderAll();
-  (function showInitialLoading(){
-    const el0 = $('#lockScreen');
-    el0.className = 'show';
-    el0.innerHTML = `<div class="lock-card"><h2>جارٍ التحقق…</h2></div>`;
-  })();
-  firebase.auth().onAuthStateChanged((user) => {
-    if (!user) {
-      state.db = null;
-      currentRole = null; currentCashier = null;
-      renderAuthGate();
-      return;
-    }
-    initFirestore();
-  });
+  renderLockScreen();
+  initDb();
 })();
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
-  });
-}
 </script>
 </body>
 </html>
