@@ -597,6 +597,9 @@
     </div>
     <div id="withdrawalsList"></div>
 
+    <div class="section-head"><h2>الحساب السحابي (المزامنة بين الأجهزة)</h2></div>
+    <div class="day-card" id="cloudAccountCard"></div>
+
     <div class="section-head"><h2>ورديات أمناء الصندوق</h2></div>
     <div class="field"><label>اليوم</label><input id="shiftDate" type="date"></div>
     <div id="shiftReport"></div>
@@ -681,6 +684,37 @@
     }
     tryNext();
   });
+  // Firebase (email-based cross-device sync). Loads the compat SDK (matches the app's
+  // existing collection().doc().onSnapshot API almost 1:1) and initializes the project.
+  window.__fbReady = (async () => {
+    const firebaseConfig = {
+      apiKey: "AIzaSyDH3js62pGQoFn_qLG1SPZxUUtG4zfL4mo",
+      authDomain: "daftar-almakhzoun.firebaseapp.com",
+      projectId: "daftar-almakhzoun",
+      storageBucket: "daftar-almakhzoun.firebasestorage.app",
+      messagingSenderId: "76508087025",
+      appId: "1:76508087025:web:a37a84867cec4af3d31f50"
+    };
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+    try {
+      const base = 'https://cdn.jsdelivr.net/npm/firebase@10.14.1/firebase-';
+      await loadScript(base + 'app-compat.js');
+      await loadScript(base + 'auth-compat.js');
+      await loadScript(base + 'firestore-compat.js');
+      if (typeof firebase === 'undefined') return false;
+      firebase.initializeApp(firebaseConfig);
+      return true;
+    } catch (e) {
+      console.error('Firebase load failed', e);
+      return false;
+    }
+  })();
 </script>
 <script>
 (function(){
@@ -4391,6 +4425,7 @@
   }
 
   function renderManagerTab() {
+    renderCloudAccountCard();
     $('#statCapital') && ($('#statCapital').textContent = fmt(estimatedCapital()));
     $('#statProfit') && ($('#statProfit').textContent = fmt(totalNetProfit()));
     const cashEl = $('#managerCashCard');
@@ -4910,48 +4945,129 @@
     $('#syncLabel').innerHTML = `<span class="sync-dot ${ok?'':'off'}" id="syncDot"></span>${label}`;
   }
 
-  async function initDb() {
+  const SYNC_COLLECTIONS = ['products', 'movements', 'sales', 'returns', 'customers', 'debtPayments', 'expenses', 'suppliers', 'supplierPurchases', 'supplierPayments', 'workers', 'workerTransactions', 'customerLoans', 'ownerWithdrawals'];
+
+  function connectDb(db, onErr) {
+    state.db = db;
+    SYNC_COLLECTIONS.forEach(name => {
+      db.collection(name).onSnapshot((snap) => {
+        state[name] = snap.docs.map(d => ({id: d.id, ...d.data()}));
+        renderAll();
+      }, (err) => { console.error(name + ' sub error', err); if (onErr) onErr(err); });
+    });
+    db.collection('settings').doc('main').onSnapshot((snap) => {
+      state.settings = snap.exists ? snap.data() : null;
+      if (!currentRole) renderLockScreen();
+    }, (err) => {
+      console.error('settings sub error', err);
+      if (!currentRole) renderLockScreen();
+      if (onErr) onErr(err);
+    });
+  }
+
+  async function initLocalOrClaudeDb() {
     try {
       if (!window.claude || typeof window.claude.use !== 'function') throw new Error('no-runtime');
       const db = await window.claude.use('db');
       if (!db) throw new Error('unavailable');
-      state.db = db;
-
-      const collections = ['products', 'movements', 'sales', 'returns', 'customers', 'debtPayments', 'expenses', 'suppliers', 'supplierPurchases', 'supplierPayments', 'workers', 'workerTransactions', 'customerLoans', 'ownerWithdrawals'];
-      collections.forEach(name => {
-        db.collection(name).onSnapshot((snap) => {
-          state[name] = snap.docs.map(d => ({id: d.id, ...d.data()}));
-          renderAll();
-        }, (err) => {
-          console.error(name + ' sub error', err);
-        });
-      });
-
-      db.collection('settings').doc('main').onSnapshot((snap) => {
-        state.settings = snap.exists ? snap.data() : null;
-        if (!currentRole) renderLockScreen();
-      }, (err) => {
-        console.error('settings sub error', err);
-        if (!currentRole) renderLockScreen();
-      });
-
+      connectDb(db);
       setSyncStatus(true, 'متزامن مع الفريق');
     } catch (e) {
       localMode = true;
-      state.db = createLocalDb();
-      const collections = ['products', 'movements', 'sales', 'returns', 'customers', 'debtPayments', 'expenses', 'suppliers', 'supplierPurchases', 'supplierPayments', 'workers', 'workerTransactions', 'customerLoans', 'ownerWithdrawals'];
-      collections.forEach(name => {
-        state.db.collection(name).onSnapshot((snap) => {
-          state[name] = snap.docs.map(d => ({id: d.id, ...d.data()}));
-          renderAll();
-        });
-      });
-      state.db.collection('settings').doc('main').onSnapshot((snap) => {
-        state.settings = snap.exists ? snap.data() : null;
-        if (!currentRole) renderLockScreen();
-      });
+      connectDb(createLocalDb());
       setSyncStatus(false, 'محفوظ محليًا على هذا الجهاز');
     }
+  }
+
+  function renderAuthGate(mode) {
+    const el = $('#lockScreen');
+    el.className = 'show';
+    const isSignup = mode === 'signup';
+    el.innerHTML = `
+      <div class="lock-card">
+        <h2>${isSignup ? 'إنشاء حساب جديد' : 'تسجيل الدخول'}</h2>
+        <p class="sub">${isSignup ? 'أنشئ حسابًا بالإيميل — استخدم نفس الإيميل وكلمة المرور على كل الأجهزة عشان تتزامن بياناتك.' : 'سجّل دخولك بنفس الإيميل وكلمة المرور اللي استخدمتها على باقي الأجهزة.'}</p>
+        <div class="field"><label>البريد الإلكتروني</label><input id="authEmail" type="email" inputmode="email" placeholder="example@email.com" autocomplete="username"></div>
+        <div class="field"><label>كلمة المرور</label><input id="authPass" type="password" placeholder="•••••••• (٦ أحرف على الأقل)" autocomplete="${isSignup?'new-password':'current-password'}"></div>
+        <div id="authError" style="color:var(--rust); font-size:13px; min-height:18px; margin:4px 0"></div>
+        <button class="btn" id="authSubmitBtn" style="width:100%">${isSignup ? 'إنشاء الحساب والدخول' : 'دخول'}</button>
+        <button class="btn secondary" id="authSwitchBtn" style="width:100%; margin-top:8px">${isSignup ? 'عندك حساب؟ سجّل دخول' : 'ما عندك حساب؟ أنشئ واحد'}</button>
+      </div>
+    `;
+    const errEl = $('#authError');
+    $('#authSwitchBtn').addEventListener('click', () => renderAuthGate(isSignup ? 'login' : 'signup'));
+    $('#authSubmitBtn').addEventListener('click', async () => {
+      const email = $('#authEmail').value.trim();
+      const pass = $('#authPass').value;
+      errEl.textContent = '';
+      if (!email || !pass) { errEl.textContent = 'أدخل الإيميل وكلمة المرور'; return; }
+      if (pass.length < 6) { errEl.textContent = 'كلمة المرور لازم تكون ٦ أحرف على الأقل'; return; }
+      $('#authSubmitBtn').disabled = true;
+      $('#authSubmitBtn').textContent = 'جارٍ المعالجة…';
+      try {
+        if (isSignup) {
+          await firebase.auth().createUserWithEmailAndPassword(email, pass);
+        } else {
+          await firebase.auth().signInWithEmailAndPassword(email, pass);
+        }
+        // onAuthStateChanged below will take it from here.
+      } catch (e) {
+        const map = {
+          'auth/email-already-in-use': 'هذا الإيميل مسجّل مسبقًا — سجّل دخول بدل إنشاء حساب',
+          'auth/invalid-email': 'صيغة الإيميل غير صحيحة',
+          'auth/weak-password': 'كلمة المرور ضعيفة جدًا',
+          'auth/user-not-found': 'ما فيه حساب بهذا الإيميل — أنشئ واحد',
+          'auth/wrong-password': 'كلمة المرور غير صحيحة',
+          'auth/invalid-credential': 'الإيميل أو كلمة المرور غير صحيحة',
+          'auth/too-many-requests': 'محاولات كثيرة فاشلة — انتظر شوي وحاول مرة ثانية'
+        };
+        errEl.textContent = map[e.code] || ('حدث خطأ: ' + (e.message || e.code || 'غير معروف'));
+        $('#authSubmitBtn').disabled = false;
+        $('#authSubmitBtn').textContent = isSignup ? 'إنشاء الحساب والدخول' : 'دخول';
+      }
+    });
+  }
+
+  function renderCloudAccountCard() {
+    const el = $('#cloudAccountCard');
+    if (!el) return;
+    if (typeof firebase === 'undefined' || !firebase.auth || !firebase.auth().currentUser) {
+      el.innerHTML = `<div class="empty">غير متصل بحساب سحابي (${localMode ? 'وضع محلي على هذا الجهاز فقط' : 'جارٍ الاتصال'}).</div>`;
+      return;
+    }
+    const email = firebase.auth().currentUser.email;
+    el.innerHTML = `
+      <div class="finance-row"><div><div class="fname">الحساب المسجّل</div></div><div class="famt">${escapeHtml(email)}</div></div>
+      <p class="sub" style="margin-top:4px">بياناتك متزامنة تلقائيًا مع أي جهاز تسجّل دخول فيه بنفس هذا الحساب.</p>
+      <button class="btn secondary" id="cloudSignOutBtn" style="width:100%; margin-top:8px">تسجيل الخروج من الحساب السحابي</button>
+    `;
+    $('#cloudSignOutBtn').addEventListener('click', async () => {
+      if (!confirm('تسجيل الخروج من الحساب السحابي؟ ستحتاج تسجّل دخول مرة ثانية لرؤية بياناتك.')) return;
+      currentRole = null; currentCashier = null;
+      await firebase.auth().signOut();
+    });
+  }
+
+  async function initDb() {
+    const fbOk = await window.__fbReady;
+    if (!fbOk || typeof firebase === 'undefined') { await initLocalOrClaudeDb(); return; }
+
+    firebase.auth().onAuthStateChanged((user) => {
+      if (user) {
+        connectDb(firebase.firestore());
+        setSyncStatus(true, 'متزامن — ' + user.email);
+        renderCloudAccountCard();
+      } else {
+        state.db = null; state.settings = null;
+        currentRole = null; currentCashier = null;
+        setSyncStatus(false, 'غير مسجّل دخول');
+        renderAuthGate('login');
+        renderCloudAccountCard();
+      }
+    }, (err) => {
+      console.error('auth state error', err);
+      initLocalOrClaudeDb();
+    });
   }
 
   renderAll();
