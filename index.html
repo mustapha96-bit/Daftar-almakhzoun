@@ -5052,9 +5052,16 @@
     const fbOk = await window.__fbReady;
     if (!fbOk || typeof firebase === 'undefined') { await initLocalOrClaudeDb(); return; }
 
+    function scopedFirestore(uid) {
+      // Scopes every collection under this user's own store so different
+      // accounts (different shops) never see each other's data.
+      const root = firebase.firestore().collection('stores').doc(uid);
+      return { collection(name) { return root.collection(name); } };
+    }
+
     firebase.auth().onAuthStateChanged((user) => {
       if (user) {
-        connectDb(firebase.firestore());
+        connectDb(scopedFirestore(user.uid));
         setSyncStatus(true, 'متزامن — ' + user.email);
         renderCloudAccountCard();
       } else {
